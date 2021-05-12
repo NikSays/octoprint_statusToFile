@@ -1,8 +1,30 @@
 from octorest import OctoRest
 from time import sleep
-try:
-    client = OctoRest(url="http://192.168.40.30", apikey="868940A42CF54D4CB2969F27B8CB4B73")
-    status={
+from dotenv import load_dotenv
+
+load_dotenv()
+
+client = OctoRest(url="http://192.168.40.30", apikey="868940A42CF54D4CB2969F27B8CB4B73")
+def format_time(seconds):
+    total_minutes = seconds//60
+    hours = total_minutes//60
+    minutes = total_minutes%60
+    return f"{hours}:{minutes:0>2}"
+
+str_len = 18
+def generate_string(name, value):
+    padding = str_len - len(name) - 1
+    return f"{name}:{value:>{padding}}"
+
+def write(data):
+    with open('/opt/octoprint-api/status_file.txt', 'w') as status_file:
+        for string in data.keys():
+            status_file.write(data[string])
+            status_file.write('\n')
+
+
+while 1:
+    out_status={
         'state':'',                                    # Adding newline for writing in file
         'hotend':'',
         'heatbed':'',
@@ -10,54 +32,39 @@ try:
         'print_time':'',
         'time_left':'',
     }
-    while 1:
-        sleep(1)
-        status['state'] = client.job_info()['state'].split()[1]     # Getting current state
+    sleep(1)
+    raw_status = client.job_info()
+    raw_status['temperature'] = client.printer()['temperature']
+    
+    state_value = raw_status['state'].split()[0]
+    out_status['state'] = generate_string('State', state_value)
 
-        with open('/opt/octoprint-api/status_file.txt', 'w') as status_file:
-            for string in keys(status):
-                status_file.write(status[string],'\n')
+    if out_status['state'] in ['Offline', 'Connecting', 'Error']: 
+        write(out_status)
+        continue        # If printer can provide temperatures
+    
+    raw_hotend = raw_status['temperature']['tool0']
+    raw_heatbed = raw_status['temperature']['bed']
 
-        if state in ['Offline', 'Connecting', 'Error']: 
-            continue        # If printer can provide temperatures
+    hotend_value = f"{int(raw_hotend['actual'])}/{int(raw_hotend['target'])}°C"
+    out_status['hotend'] = generate_string('Hotend', hotend_value)
+    
+    heatbed_value = f"{int(raw_heatbed['actual'])}/{int(raw_heatbed['target'])}°C"
+    out_status['heatbed'] = generate_string('Heatbed', heatbed_value)
 
-        temperature=client.printer()['temperature']             # get temperatures
-        hotend=int(temperature['tool0']['actual'])
-        hotend_target=int(temperature['tool0']['target'])
-        heatbed=int(temperature['bed']['actual'])
-        heatbed_target=int(temperature['bed']['target'])
-
-        hotend_tmp='{}/{}°C'.format(hotend, hotend_target)      # 100/190°C
-        heatbed_tmp='{}/{}°C'.format(heatbed, heatbed_target)
-
-        hotend_str='Hotend:{:>{padding}}\n'.format(hotend_tmp, padding=16-len('Hotend:'))     # Filing strings with spaces so that
-        heatbed_str='Heatbed:{:>{padding}}\n'.format(heatbed_tmp, padding=16-len('Heatbed:')) # they have exactly 16 characters
-
-        if state == 'Operational':
-            continue                              # If currently printing
-
-        progress = client.job_info()['progress']
-        percent=int(progress['completion'])                 # get percentage of completion
-        percent_tmp = str(percent) + '%'
-        progress_str = 'Progress:{:>{padding}}\n'.format(percent_tmp, padding=16-len('Progress:'))
-
-        print_time = progress['printTime']                  # Get elapsed time in seconds 
-        time_left = progress['printTimeLeft']               # Get remaining time in seconds
-        if print_time != None:
-            print_time_hours = int(print_time/60)//60
-            print_time_minutes = int(print_time/60)%60
-            print_time_tmp = '{}:{:0>2}'.format(print_time_hours, print_time_minutes)     # Add a zero to minutes if it is one digit, so it's 0:01, not 0:1
-            print_time_str = 'Print time:{:>{padding}}\n'.format(print_time_tmp, padding=16-len('Print time:'))
-        if time_left != None:                               # If there is a remaining time estimate
-            time_left_hours = int(time_left/60)//60
-            time_left_minutes = int(time_left/60)%60
-            time_left_tmp = '{}:{:0>2}'.format(time_left_hours,time_left_minutes)
-            if time_left_hours <= 100:
-                time_left_str = 'Time left:{:>{padding}}\n'.format(time_left_tmp, padding=16-len('Time left:'))
-
-
-except Exception as e:                                            # If can't connect to octoprint
-    print(e)
-    status_file = open('/opt/octoprint-api/status_file.txt', 'w')
-    status_file.write('Lost connection')
-    status_file.close()
+    if state_value == 'Operational':
+        write(out_status)
+        continue
+   
+    progress_value = f"{int(raw_status['progress']['completion'])}%"
+    out_status['progress'] = generate_string('Progress', progress_value)
+    
+    print_time = raw_status['progress']['printTime']
+    if print_time != None:
+        out_status['print_time'] = generate_string('Print time', format_time(print_time))
+                
+    
+    time_left = raw_status['progress']['printTimeLeft']
+    if time_left != None:
+        out_status['time_left'] = generate_string('Time left', format_time(time_left))
+    write(out_status)
